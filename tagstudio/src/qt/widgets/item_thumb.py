@@ -1,13 +1,11 @@
 # Copyright (C) 2024 Travis Abendshien (CyanVoxel).
 # Licensed under the GPL-3.0 License.
 # Created for TagStudio: https://github.com/CyanVoxel/TagStudio
-
-
+import contextlib
 import logging
 import os
 import time
 import typing
-from types import FunctionType
 from pathlib import Path
 from typing import Optional
 
@@ -23,22 +21,27 @@ from PySide6.QtWidgets import (
     QCheckBox,
 )
 
+from src.core.enums import FieldID
 from src.core.library import ItemType, Library, Entry
-from src.core.ts_core import AUDIO_TYPES, VIDEO_TYPES, IMAGE_TYPES
+from src.core.constants import (
+    AUDIO_TYPES,
+    VIDEO_TYPES,
+    IMAGE_TYPES,
+    TAG_FAVORITE,
+    TAG_ARCHIVED,
+)
 from src.qt.flowlayout import FlowWidget
-from src.qt.helpers import FileOpenerHelper
-from src.qt.widgets import ThumbRenderer, ThumbButton
+from src.qt.helpers.file_opener import FileOpenerHelper
+from src.qt.widgets.thumb_renderer import ThumbRenderer
+from src.qt.widgets.thumb_button import ThumbButton
 
 if typing.TYPE_CHECKING:
-    from src.qt.widgets import PreviewPanel
+    from src.qt.widgets.preview_panel import PreviewPanel
 
 ERROR = f"[ERROR]"
 WARNING = f"[WARNING]"
 INFO = f"[INFO]"
 
-DEFAULT_META_TAG_FIELD = 8
-TAG_FAVORITE = 1
-TAG_ARCHIVED = 0
 
 logging.basicConfig(format="%(message)s", level=logging.INFO)
 
@@ -51,21 +54,17 @@ class ItemThumb(FlowWidget):
     update_cutoff: float = time.time()
 
     collation_icon_128: Image.Image = Image.open(
-        os.path.normpath(
-            f"{Path(__file__).parent.parent.parent.parent}/resources/qt/images/collation_icon_128.png"
-        )
+        str(Path(__file__).parents[3] / "resources/qt/images/collation_icon_128.png")
     )
     collation_icon_128.load()
 
     tag_group_icon_128: Image.Image = Image.open(
-        os.path.normpath(
-            f"{Path(__file__).parent.parent.parent.parent}/resources/qt/images/tag_group_icon_128.png"
-        )
+        str(Path(__file__).parents[3] / "resources/qt/images/tag_group_icon_128.png")
     )
     tag_group_icon_128.load()
 
     small_text_style = (
-        f"background-color:rgba(0, 0, 0, 128);"
+        f"background-color:rgba(0, 0, 0, 192);"
         f"font-family:Oxanium;"
         f"font-weight:bold;"
         f"font-size:12px;"
@@ -77,7 +76,7 @@ class ItemThumb(FlowWidget):
     )
 
     med_text_style = (
-        f"background-color:rgba(17, 15, 27, 192);"
+        f"background-color:rgba(0, 0, 0, 192);"
         f"font-family:Oxanium;"
         f"font-weight:bold;"
         f"font-size:18px;"
@@ -180,7 +179,7 @@ class ItemThumb(FlowWidget):
             lambda ts, i, s, ext: (
                 self.update_thumb(ts, image=i),
                 self.update_size(ts, size=s),
-                self.set_extension(ext),
+                self.set_extension(ext),  # type: ignore
             )
         )
         self.thumb_button.setFlat(True)
@@ -313,6 +312,7 @@ class ItemThumb(FlowWidget):
 
     def set_mode(self, mode: Optional[ItemType]) -> None:
         if mode is None:
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             self.unsetCursor()
             self.thumb_button.setHidden(True)
             # self.check_badges.setHidden(True)
@@ -320,6 +320,7 @@ class ItemThumb(FlowWidget):
             # self.item_type_badge.setHidden(True)
             pass
         elif mode == ItemType.ENTRY and self.mode != ItemType.ENTRY:
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             self.thumb_button.setHidden(False)
             self.cb_container.setHidden(False)
@@ -329,6 +330,7 @@ class ItemThumb(FlowWidget):
             self.count_badge.setHidden(True)
             self.ext_badge.setHidden(True)
         elif mode == ItemType.COLLATION and self.mode != ItemType.COLLATION:
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             self.thumb_button.setHidden(False)
             self.cb_container.setHidden(True)
@@ -337,6 +339,7 @@ class ItemThumb(FlowWidget):
             self.count_badge.setHidden(False)
             self.item_type_badge.setHidden(False)
         elif mode == ItemType.TAG_GROUP and self.mode != ItemType.TAG_GROUP:
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             self.thumb_button.setHidden(False)
             # self.cb_container.setHidden(True)
@@ -352,9 +355,11 @@ class ItemThumb(FlowWidget):
     # 		pass
 
     def set_extension(self, ext: str) -> None:
-        if ext and ext not in IMAGE_TYPES or ext in ["gif", "apng"]:
+        if ext and ext.startswith(".") is False:
+            ext = "." + ext
+        if ext and ext not in IMAGE_TYPES or ext in [".gif", ".apng"]:
             self.ext_badge.setHidden(False)
-            self.ext_badge.setText(ext.upper())
+            self.ext_badge.setText(ext.upper()[1:])
             if ext in VIDEO_TYPES + AUDIO_TYPES:
                 self.count_badge.setHidden(False)
         else:
@@ -387,22 +392,25 @@ class ItemThumb(FlowWidget):
                 self.thumb_button.setMinimumSize(size)
                 self.thumb_button.setMaximumSize(size)
 
-    def update_clickable(self, clickable: FunctionType = None):
+    def update_clickable(self, clickable: typing.Callable):
         """Updates attributes of a thumbnail element."""
         # logging.info(f'[GUI] Updating Click Event for element {id(element)}: {id(clickable) if clickable else None}')
-        try:
+        if self.thumb_button.is_connected:
             self.thumb_button.clicked.disconnect()
-        except RuntimeError:
-            pass
         if clickable:
             self.thumb_button.clicked.connect(clickable)
+            self.thumb_button.is_connected = True
 
     def update_badges(self):
         if self.mode == ItemType.ENTRY:
             # logging.info(f'[UPDATE BADGES] ENTRY: {self.lib.get_entry(self.item_id)}')
             # logging.info(f'[UPDATE BADGES] ARCH: {self.lib.get_entry(self.item_id).has_tag(self.lib, 0)}, FAV: {self.lib.get_entry(self.item_id).has_tag(self.lib, 1)}')
-            self.assign_archived(self.lib.get_entry(self.item_id).has_tag(self.lib, 0))
-            self.assign_favorite(self.lib.get_entry(self.item_id).has_tag(self.lib, 1))
+            self.assign_archived(
+                self.lib.get_entry(self.item_id).has_tag(self.lib, TAG_ARCHIVED)
+            )
+            self.assign_favorite(
+                self.lib.get_entry(self.item_id).has_tag(self.lib, TAG_FAVORITE)
+            )
 
     def set_item_id(self, id: int):
         """
@@ -412,9 +420,7 @@ class ItemThumb(FlowWidget):
         if id == -1:
             return
         entry = self.lib.get_entry(self.item_id)
-        filepath = os.path.normpath(
-            f"{self.lib.library_dir}/{entry.path}/{entry.filename}"
-        )
+        filepath = self.lib.library_dir / entry.path / entry.filename
         self.opener.set_filepath(filepath)
 
     def assign_favorite(self, value: bool):
@@ -473,7 +479,7 @@ class ItemThumb(FlowWidget):
                 entry.add_tag(
                     self.panel.driver.lib,
                     tag_id,
-                    field_id=DEFAULT_META_TAG_FIELD,
+                    field_id=FieldID.META_TAGS,
                     field_index=-1,
                 )
             else:
